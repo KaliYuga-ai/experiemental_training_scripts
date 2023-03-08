@@ -1,0 +1,7 @@
+Training with MS-SSIM loss--dont forget to !pip install kornia
+
+Multi-Scale Structural Similarity Index (MS-SSIM) loss, which is a measure of the structural similarity between two images. The MS-SSIM loss is 
+a modification of the SSIM loss that takes into account the fact that images can have different scales of structure. It is commonly used in image 
+processing and computer vision tasks where preserving the structure of the image is important, such as in super-resolution, denoising, and image 
+compression. The MS-SSIM loss works by comparing the luminance, contrast, and structure of two images at different scales, and the final loss value 
+is a weighted sum of the differences at each scale.
