@@ -66,6 +66,25 @@ def ms_ssim_loss(recon_x, x, data_range=1., weights=None, win_size=11, win_sigma
         return torch.sum(1 - ms_ssim_val)
     else:
         raise ValueError(f"Invalid reduction type {reduction}.")
+        
+# Training loop
+for epoch in range(args.num_epochs):
+    for batch_idx, (inputs, _) in enumerate(train_loader):
+        inputs = inputs.to(device)
+
+        optimizer.zero_grad()
+
+        recon_x, mu, logvar = model(inputs)
+        loss = ms_ssim_loss(recon_x, inputs)
+
+        loss.backward()
+        optimizer.step()
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(inputs), len(train_loader.dataset),
+                100. * batch_idx / len(train_loader),
+                loss.item() / len(inputs)))
 
 
 torch.backends.cudnn.benchmark = True
