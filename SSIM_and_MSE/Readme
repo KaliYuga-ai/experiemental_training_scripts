@@ -1,1 +1,7 @@
 Training with both SSIM and MSE losses. Don't forget to !pip install torchgeometry
+
+Combining DSSIM and MSE loss functions is a way to train a model to generate high-quality images that are both structurally similar to the input image 
+and visually appealing. DSSIM measures the structural similarity between the generated image and the input image, while MSE loss measures the mean squared 
+error between the two images. By combining these two loss functions, we can train a model to generate images that preserve important structural details 
+while also minimizing the pixel-level differences between the generated and input images. This approach is particularly effective for image restoration 
+and super-resolution tasks.
