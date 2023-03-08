@@ -27,17 +27,18 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 import lpips
-import torch.nn.functional as F
 
-# Define the custom loss function
+# Download and import the LPIPS model
+lpips_model = lpips.LPIPS(net='vgg', version=0.1)
+
+# Define the custom loss function using LPIPS
 def loss_fn(recon_x, x):
-    lpips_loss = lpips.LPIPS(net='vgg', spatial=True)
-    lpips_loss.to(device)
-    lpips_loss_value = lpips_loss(recon_x, x).mean()
-    return lpips_loss_value
+    lpips_loss = lpips_model(recon_x, x).mean()
+
+    return lpips_loss
 
 # Training loop
-for epoch in range(args.num_epochs):
+for epoch in range(num_epochs):
     for batch_idx, (inputs, _) in enumerate(train_loader):
         inputs = inputs.to(device)
 
@@ -49,12 +50,11 @@ for epoch in range(args.num_epochs):
         loss.backward()
         optimizer.step()
 
-        if batch_idx % args.log_interval == 0:
+        if batch_idx % log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(inputs), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader),
                 loss.item() / len(inputs)))
-
 
 torch.backends.cudnn.benchmark = True
 
