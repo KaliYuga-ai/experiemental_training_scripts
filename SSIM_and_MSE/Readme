@@ -1,0 +1,1 @@
+Training with both SSIM and MSE losses. Don't forget to !pip install torchgeometry
