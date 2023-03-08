@@ -1,0 +1,6 @@
+#DSSIM plus TV Losses
+
+The combination of DSSIM and TV loss function is a way to train a model to generate images that are similar to the input but with improved 
+clarity and sharpness. DSSIM measures the structural similarity between the generated image and the input image, while TV loss encourages 
+the generated image to have smooth transitions and reduces high-frequency noise. By combining these two loss functions, we can train a model 
+to generate images that preserve important structural details while also being visually pleasing and clear.
