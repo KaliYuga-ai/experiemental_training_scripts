@@ -35,6 +35,7 @@ torch.backends.cudnn.benchmark = True
 logger = get_logger(__name__)
 
 
+def main():
 
 def load_embeddings(embeddings_path):
     return np.load(embeddings_path)
@@ -863,3 +864,4 @@ if args.max_train_steps is None:
 if __name__ == "__main__":
     args = parse_args()
     main(args)
+    main()
