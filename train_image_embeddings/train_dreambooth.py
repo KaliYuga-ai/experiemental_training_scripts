@@ -642,32 +642,32 @@ if not args.train_text_encoder:
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
 if not args.not_cache_latents:
-        latents_cache = []
-        text_encoder_cache = []
-        for batch in tqdm(train_dataloader, desc="Caching latents"):
-            with torch.no_grad():
-                batch["pixel_values"] = batch["pixel_values"].to(accelerator.device, non_blocking=True, dtype=weight_dtype)
-                batch["input_ids"] = batch["input_ids"].to(accelerator.device, non_blocking=True)
-                latents_cache.append(vae.encode(batch["pixel_values"]).latent_dist)
-                if args.train_text_encoder:
-                    text_encoder_cache.append(batch["input_ids"])
-                else:
-                    text_encoder_cache.append(text_encoder(batch["input_ids"])[0])
-        train_dataset = LatentsDataset(latents_cache, text_encoder_cache)
-        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, collate_fn=lambda x: x, shuffle=True)
+    latents_cache = []
+    text_encoder_cache = []
+    for batch in tqdm(train_dataloader, desc="Caching latents"):
+        with torch.no_grad():
+            batch["pixel_values"] = batch["pixel_values"].to(accelerator.device, non_blocking=True, dtype=weight_dtype)
+            batch["input_ids"] = batch["input_ids"].to(accelerator.device, non_blocking=True)
+            latents_cache.append(vae.encode(batch["pixel_values"]).latent_dist)
+            if args.train_text_encoder:
+                text_encoder_cache.append(batch["input_ids"])
+            else:
+                text_encoder_cache.append(text_encoder(batch["input_ids"])[0])
+    train_dataset = LatentsDataset(latents_cache, text_encoder_cache)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, collate_fn=lambda x: x, shuffle=True)
 
-        del vae
-        if not args.train_text_encoder:
-            del text_encoder
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    del vae
+    if not args.train_text_encoder:
+        del text_encoder
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    # Scheduler and math around the number of training steps.
-    overrode_max_train_steps = False
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-        overrode_max_train_steps = True
+# Scheduler and math around the number of training steps.
+overrode_max_train_steps = False
+num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+if args.max_train_steps is None:
+    args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+    overrode_max_train_steps = True
 
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
