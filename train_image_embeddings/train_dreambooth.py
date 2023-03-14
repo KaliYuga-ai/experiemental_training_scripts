@@ -200,7 +200,6 @@ def parse_args(input_args=None):
         help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
     )
     parser.add_argument("--embeddings_path", type=str, help="Path to the saved image embeddings file.")
-    )
     parser.add_argument(
         "--lr_scheduler",
         type=str,
