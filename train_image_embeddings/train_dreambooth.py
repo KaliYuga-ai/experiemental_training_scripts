@@ -598,17 +598,17 @@ def main(args):
 
     noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
-    train_dataset = DreamBoothDataset(
-        concepts_list=args.concepts_list,
-        tokenizer=tokenizer,
-        with_prior_preservation=args.with_prior_preservation,
-        size=args.resolution,
-        center_crop=args.center_crop,
-        num_class_images=args.num_class_images,
-        pad_tokens=args.pad_tokens,
-        hflip=args.hflip,
-        read_prompts_from_txts=args.read_prompts_from_txts,
-    )
+train_dataset = DreamBoothDataset(
+    concepts_list=args.concepts_list,
+    tokenizer=tokenizer,
+    with_prior_preservation=args.with_prior_preservation,
+    size=args.resolution,
+    center_crop=args.center_crop,
+    num_class_images=args.num_class_images,
+    pad_tokens=args.pad_tokens,
+    hflip=args.hflip,
+    read_prompts_from_txts=args.read_prompts_from_txts,
+)
 
 # Load the saved embeddings
 embeddings = load_embeddings(args.embeddings_path)
@@ -628,22 +628,21 @@ train_dataloader.collate_fn = collate_fn_with_embeddings
 # Modify the model to accept the concatenated input
 input_size = model.decoder.embed_size + embeddings.shape[1]
 model.decoder.embed = nn.Linear(input_size, model.decoder.embed_size).to(device)
-    )
 
-    weight_dtype = torch.float32
-    if args.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif args.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
+weight_dtype = torch.float32
+if args.mixed_precision == "fp16":
+    weight_dtype = torch.float16
+elif args.mixed_precision == "bf16":
+    weight_dtype = torch.bfloat16
 
-    # Move text_encode and vae to gpu.
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
-    # as these models are only used for inference, keeping weights in full precision is not required.
-    vae.to(accelerator.device, dtype=weight_dtype)
-    if not args.train_text_encoder:
-        text_encoder.to(accelerator.device, dtype=weight_dtype)
+# Move text_encode and vae to gpu.
+# For mixed precision training we cast the text_encoder and vae weights to half-precision
+# as these models are only used for inference, keeping weights in full precision is not required.
+vae.to(accelerator.device, dtype=weight_dtype)
+if not args.train_text_encoder:
+    text_encoder.to(accelerator.device, dtype=weight_dtype)
 
-    if not args.not_cache_latents:
+if not args.not_cache_latents:
         latents_cache = []
         text_encoder_cache = []
         for batch in tqdm(train_dataloader, desc="Caching latents"):
