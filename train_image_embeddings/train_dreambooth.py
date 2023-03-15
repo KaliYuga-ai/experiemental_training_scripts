@@ -51,6 +51,12 @@ def parse_args(input_args=None):
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+    "--combined_embeddings_path",
+    type=str,
+    default=None,
+    help="Path to the combined embeddings file (image and caption embeddings)",
+    )
+    parser.add_argument(
         "--pretrained_vae_name_or_path",
         type=str,
         default=None,
@@ -271,6 +277,9 @@ def parse_args(input_args=None):
         args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
+        
+    if args.combined_embeddings_path is not None:
+        combined_embeddings = np.load(args.combined_embeddings_path)
 
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
