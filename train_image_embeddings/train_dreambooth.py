@@ -614,11 +614,11 @@ train_dataloader = torch.utils.data.DataLoader(
     train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
 )
 
-    weight_dtype = torch.float32
-    if args.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif args.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
+weight_dtype = torch.float32
+if args.mixed_precision == "fp16":
+    weight_dtype = torch.float16
+elif args.mixed_precision == "bf16":
+    weight_dtype = torch.bfloat16
 
     # Move text_encode and vae to gpu.
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
