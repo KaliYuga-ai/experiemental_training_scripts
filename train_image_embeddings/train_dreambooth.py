@@ -30,11 +30,6 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
-
-image_embeddings_csv_path = "your_image_embeddings_file.csv" # Replace this with the path to your CSV file
-image_embeddings_df = pd.read_csv(image_embeddings_csv_path)
-
-
 torch.backends.cudnn.benchmark = True
 
 
