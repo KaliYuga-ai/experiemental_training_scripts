@@ -6,10 +6,12 @@ import json
 import logging
 import math
 import os
+import pandas as pd
 import numpy as np
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
+
 
 import torch
 import torch.nn.functional as F
@@ -29,16 +31,15 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
+image_embeddings_csv_path = "your_image_embeddings_file.csv" # Replace this with the path to your CSV file
+image_embeddings_df = pd.read_csv(image_embeddings_csv_path)
+
+
 torch.backends.cudnn.benchmark = True
 
 
 logger = get_logger(__name__)
 
-
-def main():
-
-def load_embeddings(embeddings_path):
-    return np.load(embeddings_path)
 
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -200,7 +201,6 @@ def parse_args(input_args=None):
         default=False,
         help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
     )
-    parser.add_argument("--embeddings_path", type=str, help="Path to the saved image embeddings file.")
     parser.add_argument(
         "--lr_scheduler",
         type=str,
@@ -289,6 +289,7 @@ class DreamBoothDataset(Dataset):
         self,
         concepts_list,
         tokenizer,
+        image_embeddings_df,
         with_prior_preservation=True,
         size=512,
         center_crop=False,
@@ -300,9 +301,11 @@ class DreamBoothDataset(Dataset):
         self.size = size
         self.center_crop = center_crop
         self.tokenizer = tokenizer
+        self.image_embeddings_df = image_embeddings_df
         self.with_prior_preservation = with_prior_preservation
         self.pad_tokens = pad_tokens
         self.read_prompts_from_txts = read_prompts_from_txts
+        
 
         self.instance_images_path = []
         self.class_images_path = []
@@ -336,42 +339,29 @@ class DreamBoothDataset(Dataset):
 
     def __len__(self):
         return self._length
-
+    
     def __getitem__(self, index):
-        example = {}
-        instance_path, instance_prompt = self.instance_images_path[index % self.num_instance_images]
-
-        if self.read_prompts_from_txts:
-            with open(str(instance_path) + ".txt") as f:
-                instance_prompt = f.read().strip()
-
-        instance_image = Image.open(instance_path)
-        if not instance_image.mode == "RGB":
-            instance_image = instance_image.convert("RGB")
-
-        example["instance_images"] = self.image_transforms(instance_image)
-        example["instance_prompt_ids"] = self.tokenizer(
-            instance_prompt,
-            padding="max_length" if self.pad_tokens else "do_not_pad",
+        caption = str(self.captions[index])
+        tokens = self.tokenizer.encode_plus(
+            caption,
+            max_length=self.max_len,
+            padding="max_length",
             truncation=True,
-            max_length=self.tokenizer.model_max_length,
-        ).input_ids
+            return_tensors="pt",
+        )
 
-        if self.with_prior_preservation:
-            class_path, class_prompt = self.class_images_path[index % self.num_class_images]
-            class_image = Image.open(class_path)
-            if not class_image.mode == "RGB":
-                class_image = class_image.convert("RGB")
-            example["class_images"] = self.image_transforms(class_image)
-            example["class_prompt_ids"] = self.tokenizer(
-                class_prompt,
-                padding="max_length" if self.pad_tokens else "do_not_pad",
-                truncation=True,
-                max_length=self.tokenizer.model_max_length,
-            ).input_ids
+        # Get the image embedding for the current index and convert it to a tensor
+        image_embedding = self.image_embeddings_df.loc[index].values
+        image_embedding_tensor = torch.tensor(image_embedding, dtype=torch.float32)
 
-        return example
+        # Concatenate the image_embedding_tensor to the input_ids tensor
+        input_ids = tokens["input_ids"].squeeze()
+        input_ids_with_embedding = torch.cat((input_ids, image_embedding_tensor))
 
+        return {
+            "input_ids": input_ids_with_embedding,
+            "attention_mask": tokens["attention_mask"].squeeze(),
+        }
 
 class PromptDataset(Dataset):
     "A simple dataset to prepare the prompts to generate class images on multiple GPUs."
@@ -598,77 +588,87 @@ def main(args):
 
     noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
-train_dataset = DreamBoothDataset(
-    concepts_list=args.concepts_list,
-    tokenizer=tokenizer,
-    with_prior_preservation=args.with_prior_preservation,
-    size=args.resolution,
-    center_crop=args.center_crop,
-    num_class_images=args.num_class_images,
-    pad_tokens=args.pad_tokens,
-    hflip=args.hflip,
-    read_prompts_from_txts=args.read_prompts_from_txts,
-)
+    train_dataset = DreamBoothDataset(
+        concepts_list=args.concepts_list,
+        tokenizer=tokenizer,
+        with_prior_preservation=args.with_prior_preservation,
+        size=args.resolution,
+        center_crop=args.center_crop,
+        num_class_images=args.num_class_images,
+        pad_tokens=args.pad_tokens,
+        hflip=args.hflip,
+        read_prompts_from_txts=args.read_prompts_from_txts,
+    )
 
-# Load the saved embeddings
-embeddings = load_embeddings(args.embeddings_path)
+    def collate_fn(examples):
+        input_ids = [example["instance_prompt_ids"] for example in examples]
+        pixel_values = [example["instance_images"] for example in examples]
 
-def collate_fn_with_embeddings(batch):
-    images, captions = zip(*batch)
-    images = torch.stack(images, 0)
-    embeddings_batch = embeddings[[dataset.get_image_idx(img_id) for img_id in images]]
-    embeddings_batch = torch.tensor(embeddings_batch).to(device)
-    captions = [tokenizer.encode(caption) for caption in captions]
-    captions = torch.tensor(captions).to(device)
-    input_captions = torch.cat([embeddings_batch, captions], dim=-1)
-    return images, input_captions
+        # Concat class and instance examples for prior preservation.
+        # We do this to avoid doing two forward passes.
+        if args.with_prior_preservation:
+            input_ids += [example["class_prompt_ids"] for example in examples]
+            pixel_values += [example["class_images"] for example in examples]
 
-train_dataloader.collate_fn = collate_fn_with_embeddings
+        pixel_values = torch.stack(pixel_values)
+        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
-# Modify the model to accept the concatenated input
-input_size = model.decoder.embed_size + embeddings.shape[1]
-model.decoder.embed = nn.Linear(input_size, model.decoder.embed_size).to(device)
+        input_ids = tokenizer.pad(
+            {"input_ids": input_ids},
+            padding=True,
+            return_tensors="pt",
+        ).input_ids
 
-weight_dtype = torch.float32
-if args.mixed_precision == "fp16":
-    weight_dtype = torch.float16
-elif args.mixed_precision == "bf16":
-    weight_dtype = torch.bfloat16
+        batch = {
+            "input_ids": input_ids,
+            "pixel_values": pixel_values,
+        }
+        return batch
 
-# Move text_encode and vae to gpu.
-# For mixed precision training we cast the text_encoder and vae weights to half-precision
-# as these models are only used for inference, keeping weights in full precision is not required.
-vae.to(accelerator.device, dtype=weight_dtype)
-if not args.train_text_encoder:
-    text_encoder.to(accelerator.device, dtype=weight_dtype)
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
+    )
 
-if not args.not_cache_latents:
-    latents_cache = []
-    text_encoder_cache = []
-    for batch in tqdm(train_dataloader, desc="Caching latents"):
-        with torch.no_grad():
-            batch["pixel_values"] = batch["pixel_values"].to(accelerator.device, non_blocking=True, dtype=weight_dtype)
-            batch["input_ids"] = batch["input_ids"].to(accelerator.device, non_blocking=True)
-            latents_cache.append(vae.encode(batch["pixel_values"]).latent_dist)
-            if args.train_text_encoder:
-                text_encoder_cache.append(batch["input_ids"])
-            else:
-                text_encoder_cache.append(text_encoder(batch["input_ids"])[0])
-    train_dataset = LatentsDataset(latents_cache, text_encoder_cache)
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, collate_fn=lambda x: x, shuffle=True)
+    weight_dtype = torch.float32
+    if args.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif args.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
 
-    del vae
+    # Move text_encode and vae to gpu.
+    # For mixed precision training we cast the text_encoder and vae weights to half-precision
+    # as these models are only used for inference, keeping weights in full precision is not required.
+    vae.to(accelerator.device, dtype=weight_dtype)
     if not args.train_text_encoder:
-        del text_encoder
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        text_encoder.to(accelerator.device, dtype=weight_dtype)
 
-# Scheduler and math around the number of training steps.
-overrode_max_train_steps = False
-num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-if args.max_train_steps is None:
-    args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    overrode_max_train_steps = True
+    if not args.not_cache_latents:
+        latents_cache = []
+        text_encoder_cache = []
+        for batch in tqdm(train_dataloader, desc="Caching latents"):
+            with torch.no_grad():
+                batch["pixel_values"] = batch["pixel_values"].to(accelerator.device, non_blocking=True, dtype=weight_dtype)
+                batch["input_ids"] = batch["input_ids"].to(accelerator.device, non_blocking=True)
+                latents_cache.append(vae.encode(batch["pixel_values"]).latent_dist)
+                if args.train_text_encoder:
+                    text_encoder_cache.append(batch["input_ids"])
+                else:
+                    text_encoder_cache.append(text_encoder(batch["input_ids"])[0])
+        train_dataset = LatentsDataset(latents_cache, text_encoder_cache)
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, collate_fn=lambda x: x, shuffle=True)
+
+        del vae
+        if not args.train_text_encoder:
+            del text_encoder
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # Scheduler and math around the number of training steps.
+    overrode_max_train_steps = False
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    if args.max_train_steps is None:
+        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+        overrode_max_train_steps = True
 
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
@@ -864,4 +864,3 @@ if args.max_train_steps is None:
 if __name__ == "__main__":
     args = parse_args()
     main(args)
-    main()
