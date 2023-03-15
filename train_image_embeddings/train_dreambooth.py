@@ -588,30 +588,31 @@ train_dataset = DreamBoothDataset(
 def collate_fn(examples):
     input_ids = [example["instance_prompt_ids"] for example in examples]
     pixel_values = [example["instance_images"] for example in examples]
-        # Concat class and instance examples for prior preservation.
-        # We do this to avoid doing two forward passes.
-        if args.with_prior_preservation:
-            input_ids += [example["class_prompt_ids"] for example in examples]
-            pixel_values += [example["class_images"] for example in examples]
+    
+    # Concat class and instance examples for prior preservation.
+    # We do this to avoid doing two forward passes.
+    if args.with_prior_preservation:
+        input_ids += [example["class_prompt_ids"] for example in examples]
+        pixel_values += [example["class_images"] for example in examples]
 
-        pixel_values = torch.stack(pixel_values)
-        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+    pixel_values = torch.stack(pixel_values)
+    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
-        input_ids = tokenizer.pad(
-            {"input_ids": input_ids},
-            padding=True,
-            return_tensors="pt",
-        ).input_ids
+    input_ids = tokenizer.pad(
+        {"input_ids": input_ids},
+        padding=True,
+        return_tensors="pt",
+    ).input_ids
 
-        batch = {
-            "input_ids": input_ids,
-            "pixel_values": pixel_values,
-        }
-        return batch
+    batch = {
+        "input_ids": input_ids,
+        "pixel_values": pixel_values,
+    }
+    return batch
 
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
-    )
+train_dataloader = torch.utils.data.DataLoader(
+    train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
+)
 
     weight_dtype = torch.float32
     if args.mixed_precision == "fp16":
