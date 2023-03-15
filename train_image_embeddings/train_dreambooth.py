@@ -289,65 +289,45 @@ def parse_args(input_args=None):
 
 
 class DreamBoothDataset(Dataset):
-    """
-    A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
-    It pre-processes the images and the tokenizes prompts.
-    """
-
-    def __init__(
-        self,
-        concepts_list,
-        tokenizer,
-        image_embeddings_df,
-        with_prior_preservation=True,
-        size=512,
-        center_crop=False,
-        num_class_images=None,
-        pad_tokens=False,
-        hflip=False,
-        read_prompts_from_txts=False,
-    ):
-        self.size = size
-        self.center_crop = center_crop
-        self.tokenizer = tokenizer
-        self.image_embeddings_df = image_embeddings_df
-        self.with_prior_preservation = with_prior_preservation
-        self.pad_tokens = pad_tokens
+    def __init__(self, root, transform=None, target_transform=None, embeddings_path=None, read_prompts_from_txts=False):
+        self.root = root
+        self.transform = transform
+        self.target_transform = target_transform
+        self.imgs = [os.path.join(root, f) for f in os.listdir(root) if f.endswith((".jpg", ".png"))]
         self.read_prompts_from_txts = read_prompts_from_txts
-        
+        self.embeddings = None
 
-        self.instance_images_path = []
-        self.class_images_path = []
+        if embeddings_path:
+            self.embeddings = np.load(embeddings_path)
 
-        for concept in concepts_list:
-            inst_img_path = [
-                (x, concept["instance_prompt"])
-                for x in Path(concept["instance_data_dir"]).iterdir()
-                if x.is_file() and not str(x).endswith(".txt")
-            ]
-            self.instance_images_path.extend(inst_img_path)
+    def __getitem__(self, index):
+        img_path = self.imgs[index]
 
-            if with_prior_preservation:
-                class_img_path = [(x, concept["class_prompt"]) for x in Path(concept["class_data_dir"]).iterdir() if x.is_file()]
-                self.class_images_path.extend(class_img_path[:num_class_images])
+        if self.embeddings is not None:
+            img = self.embeddings[index]
+        else:
+            img = Image.open(img_path).convert("RGB")
 
-        random.shuffle(self.instance_images_path)
-        self.num_instance_images = len(self.instance_images_path)
-        self.num_class_images = len(self.class_images_path)
-        self._length = max(self.num_class_images, self.num_instance_images)
+        if self.transform is not None:
+            img = self.transform(img)
 
-        self.image_transforms = transforms.Compose(
-            [
-                transforms.RandomHorizontalFlip(0.5 * hflip),
-                transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
-                transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
+        metadata = {
+            "path": img_path,
+        }
+
+        if self.read_prompts_from_txts:
+            txt_path = f"{img_path}.txt"
+            if os.path.exists(txt_path):
+                with open(txt_path, "r") as f:
+                    metadata["prompt"] = f.read().strip()
+
+        if self.target_transform is not None:
+            metadata = self.target_transform(metadata)
+
+        return img, metadata
 
     def __len__(self):
-        return self._length
+        return len(self.imgs)
     
     def __getitem__(self, index):
         caption = str(self.captions[index])
@@ -585,34 +565,29 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     params_to_optimize = (
-        itertools.chain(unet.parameters(), text_encoder.parameters()) if args.train_text_encoder else unet.parameters()
-    )
-    optimizer = optimizer_class(
-        params_to_optimize,
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
+    itertools.chain(unet.parameters(), text_encoder.parameters()) if args.train_text_encoder else unet.parameters()
+)
+optimizer = optimizer_class(
+    params_to_optimize,
+    lr=args.learning_rate,
+    betas=(args.adam_beta1, args.adam_beta2),
+    weight_decay=args.adam_weight_decay,
+    eps=args.adam_epsilon,
+)
 
-    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
+noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
-    train_dataset = DreamBoothDataset(
-        concepts_list=args.concepts_list,
-        tokenizer=tokenizer,
-        with_prior_preservation=args.with_prior_preservation,
-        size=args.resolution,
-        center_crop=args.center_crop,
-        num_class_images=args.num_class_images,
-        pad_tokens=args.pad_tokens,
-        hflip=args.hflip,
-        read_prompts_from_txts=args.read_prompts_from_txts,
-    )
+train_dataset = DreamBoothDataset(
+    root=args.concepts_list,  # assuming 'concepts_list' contains the path to the directory with images and captions
+    transform=None,
+    target_transform=None,
+    embeddings_path=args.combined_embeddings_path,  # the path to the combined_embeddings file
+    read_prompts_from_txts=args.read_prompts_from_txts,
+)
 
-    def collate_fn(examples):
-        input_ids = [example["instance_prompt_ids"] for example in examples]
-        pixel_values = [example["instance_images"] for example in examples]
-
+def collate_fn(examples):
+    input_ids = [example["instance_prompt_ids"] for example in examples]
+    pixel_values = [example["instance_images"] for example in examples]
         # Concat class and instance examples for prior preservation.
         # We do this to avoid doing two forward passes.
         if args.with_prior_preservation:
