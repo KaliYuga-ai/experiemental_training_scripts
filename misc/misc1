@@ -1,0 +1,532 @@
+#@markdown Parents and Child Cards Shown Dragon breeding code with alleles. Copy-Paste
+!pip install tabulate
+import uuid
+import string
+import os
+import random
+import string
+import textwrap
+import random
+import time
+import torch
+from PIL import Image, ImageDraw, ImageFont
+from tabulate import tabulate
+import json
+
+def save_game_state(dragons, filename="dragons.json"):
+    dragon_data = [dragon.__dict__ for dragon in dragons]
+    with open(filename, "w") as outfile:
+        json.dump(dragon_data, outfile, indent=4, default=str)
+
+def load_game_state(filename="dragons.json"):
+    with open(filename, "r") as infile:
+        dragon_data = json.load(infile)
+
+    def convert_uuid(obj):
+        if "id" in obj:
+            obj["id"] = uuid.UUID(obj["id"])
+        if "parent1_id" in obj and obj["parent1_id"] is not None:
+            obj["parent1_id"] = uuid.UUID(obj["parent1_id"])
+        if "parent2_id" in obj and obj["parent2_id"] is not None:
+            obj["parent2_id"] = uuid.UUID(obj["parent2_id"])
+        return obj
+
+    dragons = [Dragon(**convert_uuid(dragon)) for dragon in dragon_data]
+    return dragons
+
+
+##---------------------------------------
+
+class Dragon:
+    def __init__(self, name, elements, appearance, base_stats, parents=None):
+        self.id = uuid.uuid4()  # Assign a unique id to each dragon
+        self.name = name
+        self.elements = elements
+        self.appearance = appearance
+        self.base_stats = base_stats
+        self.parents = parents
+        self.offspring = []
+
+        if parents is not None:
+            self.parent1_id, self.parent2_id = parents
+        else:
+            self.parent1_id = None
+            self.parent2_id = None
+
+
+    def __str__(self):
+        return dragon_description(self)
+    
+    def display(self):
+        data = [
+            ["Name", self.name],
+            ["Color", self.appearance["color"]],
+            ["Pattern", self.appearance["pattern"]],
+            ["Active Element(s)", ", ".join(self.elements["active"])],
+            ["Recessive Element", self.elements["recessive"]],
+            ["Health", self.base_stats["health"]],
+            ["Strength", self.base_stats["strength"]],
+            ["Speed", self.base_stats["speed"]],
+            ["Luck", self.base_stats["luck"]]
+        ]
+
+        return tabulate(data, tablefmt="grid")
+
+
+def generate_dragon_name():
+    prefixes = [
+        "Flame", "Fire", "Ice", "Frost", "Thunder", "Storm", "Earth", "Rock", 
+        "Stone", "Wind", "Sky", "Rain", "Cloud", "Mist", "Shadow", "Night", 
+        "Day", "Sun", "Moon", "Star", "Magic", "Mystic", "Crystal", "Metal",
+        "Golden", "Silver", "Bronze", "Diamond", "Jade", "Ruby", "Sapphire",
+    ]
+    suffixes = [
+        "wing", "claw", "tail", "scale", "tooth", "breath", "fire", "ice", 
+        "thunder", "storm", "earth", "rock", "stone", "wind", "sky", "rain",
+        "cloud", "mist", "shadow", "night", "day", "sun", "moon", "star",
+        "magic", "mystic", "crystal", "metal", "beak", "feather", "horn",
+    ]
+    return random.choice(prefixes) + random.choice(suffixes)
+
+def combine_primary_elements(element1, element2, element_interactions):
+    # Handle the case when the elements are the same
+    if element1 == element2:
+        return element1, None
+
+    # Check if there is a hybrid element that can be created from the two primary elements
+    hybrid_element = get_hybrid_element(element1, element2)
+    if hybrid_element:
+        return hybrid_element, None
+
+    # Check the interaction between the two primary elements
+    if element1 in element_interactions[element2]["weak"]:
+        return element1, element2
+    elif element2 in element_interactions[element1]["weak"]:
+        return element2, element1
+    else:
+        # If there is no interaction, choose one of the primary elements at random
+        return random.choice([element1, element2]), element1
+
+
+def combine_secondary_elements(element1, element2, element_interactions):
+    # Handle the case when the elements are the same or there is no secondary element
+    if not element1 or not element2 or element1 == element2:
+        return None
+
+    # Check if there is a hybrid element that can be created from the two secondary elements
+    hybrid_element = get_hybrid_element(element1, element2)
+    if hybrid_element:
+        return hybrid_element
+
+    # Check the interaction between the two secondary elements
+    if element1 in element_interactions[element2]["weak"]:
+        return element1
+    elif element2 in element_interactions[element1]["weak"]:
+        return element2
+    else:
+        # If there is no interaction, choose one of the secondary elements at random
+        return random.choice([element1, element2])
+
+
+def combine_recessive_elements(primary1, primary2, recessive1, recessive2):
+    # Handle the case when both parents have the same primary element
+    if primary1 == primary2:
+        return recessive1, recessive2
+
+    # If both parents have the same recessive element, it becomes a primary element in the hybrid
+    if recessive1 == recessive2:
+        return recessive1, None
+
+    # If one parent has the recessive element and the other has the primary element, the recessive becomes
+    # the secondary element in the hybrid
+    if primary1 == recessive2:
+        return recessive2, recessive1
+    elif primary2 == recessive1:
+        return recessive1, recessive2
+
+    # If the parents have different recessive elements, choose one at random to be the recessive in the hybrid
+    return random.choice([recessive1, recessive2]), None
+    
+def combine_elements(parent1_elements, parent2_elements, element_interactions):
+    p1_primary = parent1_elements["primary"]
+    p1_secondary = parent1_elements.get("secondary", None)
+    p2_primary = parent2_elements["primary"]
+    p2_secondary = parent2_elements.get("secondary", None)
+
+    # Inherit primary element
+    if p1_primary in element_interactions[p2_primary]["strong"]:
+        primary = p1_primary
+        recessive_primary = p2_primary
+    elif p2_primary in element_interactions[p1_primary]["strong"]:
+        primary = p2_primary
+        recessive_primary = p1_primary
+    else:
+        primary = random.choice([p1_primary, p2_primary])
+        recessive_primary = None
+
+    # Inherit secondary element
+    if p1_secondary and p2_secondary:
+        if p1_secondary in element_interactions[p2_secondary]["strong"]:
+            secondary = p1_secondary
+            recessive_secondary = p2_secondary
+        elif p2_secondary in element_interactions[p1_secondary]["strong"]:
+            secondary = p2_secondary
+            recessive_secondary = p1_secondary
+        else:
+            secondary = random.choice([p1_secondary, p2_secondary])
+            recessive_secondary = None
+    elif p1_secondary:
+        secondary = p1_secondary
+        recessive_secondary = None
+    elif p2_secondary:
+        secondary = p2_secondary
+        recessive_secondary = None
+    else:
+        secondary = None
+        recessive_secondary = None
+
+    stat_boost = None  # Modify this based on your game logic if needed
+
+    return primary, secondary, recessive_primary, recessive_secondary, stat_boost
+
+
+def get_hybrid_element(element1, element2):
+    hybrids = {
+        frozenset(["fire", "water"]): "steam",
+        frozenset(["fire", "earth"]): "lava",
+        frozenset(["fire", "air"]): "smoke",
+        frozenset(["water", "earth"]): "mud",
+        frozenset(["water", "air"]): "mist",
+        frozenset(["earth", "air"]): "sandstorm"
+    }
+
+    return hybrids.get(frozenset([element1, element2]))
+##____Dragon Population______
+def create_dragon_population(population_size):
+    dragon_population = [random_dragon() for _ in range(population_size)]
+    return dragon_population
+def display_dragon_population(dragon_population):
+    print("\nDragon Population:")
+    for index, dragon in enumerate(dragon_population):
+        print(f"{index}: {dragon.name} - Elements: {', '.join(dragon.elements)}")
+
+def find_mate(child_dragon, dragon_population):
+    excluded_ids = {child_dragon.id, child_dragon.parent1_id, child_dragon.parent2_id}
+    potential_mates = [dragon for dragon in dragon_population if dragon.id not in excluded_ids]
+
+    if not potential_mates:
+        return None
+
+    return random.choice(potential_mates)
+###_______Breeding__________
+def breed_dragons(parent1, parent2, element_interactions):
+    name = generate_dragon_name()
+    primary_element, secondary_element, recessive_primary, recessive_secondary, stat_boost = combine_elements(parent1.elements, parent2.elements, element_interactions)
+
+    elements = {
+        "primary": primary_element,
+        "secondary": secondary_element,
+        "recessive_primary": recessive_primary,
+        "recessive_secondary": recessive_secondary,
+    }
+
+    # Color inheritance
+    primary_element = elements["primary"]
+    if primary_element == parent1.elements["primary"]:
+        color = parent1.appearance["color"]
+    else:
+        color = parent2.appearance["color"]
+
+    appearance = {
+        "color": color,
+        "horn_shape": random.choice([parent1.appearance["horn_shape"], parent2.appearance["horn_shape"]]),
+        "wing_shape": random.choice([parent1.appearance["wing_shape"], parent2.appearance["wing_shape"]]),
+    }
+
+    # Determine whether to apply a stat boost
+    if (parent1.elements["secondary"], parent2.elements["secondary"]) in element_interactions.get("cancels_out", []):
+        base_stats = {
+            "health": random.randint(10, 100),
+            "strength": random.randint(1, 50) + 5,
+            "speed": random.randint(1, 50) + 5,
+            "luck": random.randint(1, 10) + 1,
+        }
+    else:
+        base_stats = {
+            "health": random.randint(10, 100),
+            "strength": random.randint(1, 50),
+            "speed": random.randint(1, 50),
+            "luck": random.randint(1, 10),
+        }
+
+    return Dragon(name, elements, appearance, base_stats, parents=(parent1, parent2))
+
+element_color_ranges = {
+    "fire": ["red", "orange", "yellow", "scarlet", "crimson"],
+    "water": ["blue", "aqua", "turquoise", "teal", "navy"],
+    "earth": ["brown", "green", "tan", "umber", "ochre"],
+    "air": ["white", "sky blue", "light gray", "light", "pale yellow"],
+    "astral": ["purple", "violet", "indigo", "amethyst", "lavender"],
+    "life": ["green", "spring green", "emerald", "lime", "forest"],
+    "death": ["black", "dark gray", "maroon", "charcoal", "dark purple"],
+    "chaos": ["rainbow", "multicolored", "iridescent", "prismatic", "kaleidoscopic"],
+    "order": ["silver", "gray", "white", "platinum", "pewter"],
+    "void": ["black", "midnight blue", "dark purple", "shadow", "obsidian"],
+}
+
+
+def random_dragon():
+    random.seed()
+    name = generate_dragon_name()
+
+    primary_elements = ["fire", "water", "earth", "air"]
+    secondary_elements = [
+        ("astral", 0.3),
+        ("life", 0.25),
+        ("death", 0.2),
+        ("chaos", 0.15),
+        ("order", 0.1),
+        ("void", 0.05),
+    ]
+
+    random_primary = random.choice(primary_elements)
+    random_secondary = random.choices(secondary_elements, weights=[p[1] for p in secondary_elements])[0][0]
+
+    elements = {
+        "primary": random_primary,
+        "secondary": random_secondary,
+        "recessive": random.choice(primary_elements + [e[0] for e in secondary_elements])
+    }
+    horn_shapes = ["curved", "straight", "spiral", "forked", "wavy", "branching", "crescent-shaped", "bladelike"]
+    wing_shapes = ["feathered", "leathery", "webbed", "angel", "mechanical", "insect-like", "crystal", "transparent", "ethereal", "petal-like"]
+
+    appearance = {
+        "color": element_color(elements, element_color_ranges),
+        "horn_shape": random.choice(horn_shapes),
+        "wing_shape": random.choice(wing_shapes),
+    }
+    base_stats = {
+        "health": random.randint(10, 100),
+        "strength": random.randint(1, 50),
+        "speed": random.randint(1, 50),
+        "luck": random.randint(1, 10),
+    }
+
+    return Dragon(name, elements, appearance, base_stats)
+
+def element_color(elements, element_color_ranges):
+    primary_element = elements["primary"]
+    return random.choice(element_color_ranges[primary_element])
+
+dragon = random_dragon()
+
+def dragon_description(dragon):
+    name = dragon.name
+    elements = dragon.elements
+    appearance = dragon.appearance
+    secondary_element_color = element_color_ranges.get(dragon.elements.get('secondary', 'void'), [])[0]
+    description = (
+        f"{name} is a {appearance['color']} and {secondary_element_color} dragon "
+        f"with {appearance['horn_shape']} horns and {appearance['wing_shape']} wings."
+    )
+
+    return description
+
+def inherit_attribute(attr1, attr2):
+    child_attr = {}
+    for key in attr1:
+        if isinstance(attr1[key], int) and isinstance(attr2[key], int):
+            base_value = (attr1[key] + attr2[key]) // 2
+            variation = random.randint(-5, 5)  # Adjust the range for more or less variation
+            child_attr[key] = max(base_value + variation, 1)  # Ensure the value stays positive
+        else:
+            child_attr[key] = random.choice([attr1[key], attr2[key]])
+    return child_attr
+
+def create_trading_card(dragon):
+    font_path = "/content/drive/MyDrive/pfeffer-mediaeval/PfefferMediaeval.otf"
+    width, height = 400, 300
+    card = Image.new('RGBA', (width, height), 'tan')
+
+    draw = ImageDraw.Draw(card)
+    border_color = 'black'
+    border_thickness = 3
+    draw.rectangle([(0, 0), (width - 1, height - 1)], outline=border_color, width=border_thickness)
+
+    font_size = 15
+    font = ImageFont.truetype(font_path, size=font_size)
+
+    name = dragon.name
+    name_width, name_height = draw.textsize(name, font=font)
+    draw.text(((width - name_width) // 2, 10), name, font=font, fill='black')
+
+    y_offset = 50
+    for stat, value in dragon.base_stats.items():
+        draw.text((10, y_offset), f"{stat}: {value}", font=font, fill='black')
+        y_offset += font_size + 10
+
+    elements_str = f"Elements: {dragon.elements['primary']} and {dragon.elements.get('secondary', '-')}"
+    draw.text((10, y_offset), elements_str, font=font, fill='black')
+    y_offset += font_size + 10
+
+    # Calculate the maximum number of characters per line
+    char_width, _ = draw.textsize("A", font=font)
+    max_chars_per_line = (width - 20) // char_width
+
+    # Add the dragon description to the trading card with text wrapping
+    appearance = dragon.appearance
+    description = f"{name} is a {appearance['color']} and {element_color_ranges.get(dragon.elements.get('secondary', 'void'), [])[0]} dragon with {appearance['horn_shape']} horns and {appearance['wing_shape']} wings."
+    wrapped_description = textwrap.fill(description, width=max_chars_per_line)
+    draw.text((10, y_offset), wrapped_description, font=font, fill='black')
+
+    card.save(f"{dragon.name}_trading_card.png")
+    card.show()
+    
+def merge_trading_cards(dragon1, dragon2):
+    card1 = Image.open(f"cards/{dragon1.id}.png")
+    card2 = Image.open(f"cards/{dragon2.id}.png")
+
+    merged_card = Image.new('RGB', (card1.width + card2.width, card1.height))
+    merged_card.paste(card1, (0, 0))
+    merged_card.paste(card2, (card1.width, 0))
+
+    merged_card.save(f"cards/{dragon1.id}_{dragon2.id}.png")
+    merged_card.show()
+
+def save_game_state(dragons):
+    with open("game_state.json", "w") as file:
+        json.dump([dragon.__dict__ for dragon in dragons], file)
+
+def print_family_tree(dragon, depth=0):
+    print("  " * depth + f"{dragon.name}")
+    if dragon.parents:
+        print_family_tree(dragon.parents[0], depth + 1)
+        print_family_tree(dragon.parents[1], depth + 1)
+
+
+def main():
+    element_interactions = {
+        "fire": {"weak": ["water"], "strong": ["air"]},
+        "water": {"weak": ["earth"], "strong": ["fire"]},
+        "earth": {"weak": ["air"], "strong": ["water"]},
+        "air": {"weak": ["fire"], "strong": ["earth"]},
+        "life": {"strong": ["death"], "weak": ["chaos"]},
+        "death": {"strong": ["chaos"], "weak": ["life"]},
+        "chaos": {"strong": ["order"], "weak": ["death"]},
+        "order": {"strong": ["astral"], "weak": ["chaos"]},
+        "astral": {"strong": ["void"], "weak": ["order"]},
+        "void": {"strong": ["life"], "weak": ["astral"]}
+    }
+
+    try:
+        dragons = load_game_state()
+        print("Loaded previous game state.")
+    except FileNotFoundError:
+        print("No saved game found. Generating new dragon.")
+        dragons = [random_dragon()]
+
+    last_original_dragons_indices = [len(dragons) - 1]
+
+    # Initialize the dragon population
+    dragon_population = create_dragon_population(10)
+
+    while True:
+        # ... Rest of the code ...
+
+        if len(dragons) > 2:
+            for idx, dragon in enumerate(dragons[-2:], start=len(dragons) - 2):
+                create_trading_card(dragon)
+        else:
+                dragon = dragons[-1]
+                create_trading_card(dragon)
+
+        print("\nOptions:")
+        print("1. Save current game")
+        print("2. Load saved game")
+        print("3. Breed these dragons")
+        print("4. Generate new dragons")
+        print("5. Display dragon population")
+        print("6. Create a new dragon")
+        print("7. Find a mate for a dragon and create offspring")
+        print("8. Show family tree")
+        print("9. View a dragon's chromosomes")
+        print("10. Exit")
+
+        choice = input("Enter your choice (1-10): ")
+
+        if choice == "1":
+            save_game_state(dragons)
+            print("Game saved successfully!")
+            print('-' * 100) # Add a line of hyphens
+        elif choice == "2":
+            dragons = load_game_state()
+            last_original_dragons_indices = [len(dragons) - 2, len(dragons) - 1]
+            print("Loaded saved game.")
+            print('-' * 100) # Add a line of hyphens
+        elif choice == "3":
+            new_dragon = breed_dragons(dragons[last_original_dragons_indices[0]], dragons[last_original_dragons_indices[1]], element_interactions)
+            print(f"\nNew dragon created:")
+            dragons.append(new_dragon)
+            dragon_population.append(new_dragon)
+            print('-' * 100) # Add a line of hyphens
+        elif choice == "4":
+            dragons.extend([random_dragon() for _ in range(2)])
+            last_original_dragons_indices = [len(dragons) - 2, len(dragons) - 1]
+            print('-' * 100) # Add a line of hyphens
+        elif choice == "5":
+            for idx, dragon in enumerate(dragon_population):
+                print(f"{idx}: {dragon.name} - {dragon_description(dragon)}")
+                print('-' * 100) # Add a line of hyphens
+        elif choice == "6":
+            new_dragon = random_dragon()
+            dragon_population.append(new_dragon)
+            print(f"Created new dragon: {new_dragon.name}")
+            print('-' * 100) # Add a line of hyphens
+        elif choice == "7":
+            active_dragon = dragons[-1]
+            mate = random_dragon()
+            print("\nParent 1:")
+            create_trading_card(active_dragon)
+            print("\nParent 2:")
+            create_trading_card(mate)
+            offspring = breed_dragons(active_dragon, mate, element_interactions)
+            offspring.id = uuid.uuid4()
+            print("\nChild:")
+            create_trading_card(offspring)
+            print(f"\nA new dragon has been added to your collection!")
+            print('-' * 100) # Add a line of hyphens
+            active_dragon.offspring.append((offspring.id, offspring))
+            mate.offspring.append((offspring.id, offspring))
+            dragons.append(offspring)
+        elif choice == "8":
+            if len(dragon_population) < 2:
+                print("Not enough dragons in the population to create a family tree.")
+                print('-' * 100) # Add a line of hyphens
+            else:
+                try:
+                    dragon_index = int(input("Enter the index of the dragon to show family tree: "))
+                    dragon = dragon_population[dragon_index]
+                    print_family_tree(dragon)
+                except (ValueError, IndexError):
+                    print("Invalid index. Please try again.")
+                    print('-' * 100) # Add a line of hyphens
+        elif choice == "9":
+            if len(dragon_population) == 0:
+                print("No dragons to view chromosomes.")
+                print('-' * 100) # Add a line of hyphens
+            else:
+                try:
+                    dragon_index = int(input("Enter the index of the dragon to view chromosomes: "))
+                    dragon = dragon_population[dragon_index]
+                    chromosome_viewer(dragon)
+                except (ValueError, IndexError):
+                    print("Invalid index. Please try again.")
+                    print('-' * 100) # Add a line of hyphens
+        elif choice == "10":
+            break
+        else:
+            print("Invalid choice. Please try again.")
+            print('-' * 100) # Add a line of hyphens
+
+if __name__ == "__main__":
+    main()
